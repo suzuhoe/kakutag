@@ -19,6 +19,28 @@ OpenCV ArUco dictionaries and the AprilTag dictionaries exposed by OpenCV.
 > change. Validate on your own camera, CPU, compiler, OpenCV version, and marker
 > family before production use.
 
+## Current Maturity
+
+KakuTag is not a drop-in production replacement for OpenCV ArUco yet. The public
+repository now includes a smoke test and CI entry point, but it does not yet
+include a real-camera dataset, golden-image regression suite, or reproducible
+OpenCV-vs-KakuTag benchmark harness.
+
+Known limitations:
+
+- Benchmark numbers below are local synthetic measurements, not a reproducible
+  public benchmark suite.
+- `ArucoDetector` owns mutable scratch buffers. Use one detector instance per
+  thread, and do not treat it as immutable.
+- `detect(image)` returns a detector-owned vector that is overwritten by the
+  next detection call. Use `detect(image, output)` or `detect_copy(image)` when
+  caller-owned results are safer.
+- `detect_inverted_marker` retries on an inverted image only when the primary
+  pass finds no markers. Mixed normal and inverted markers in the same image are
+  not fully handled by one detector pass.
+- The detector contains heuristic thresholds tuned on limited scenes. Validate
+  recall, false positives, corner error, and pose error on your target workload.
+
 ## 📊 Reference Benchmark
 
 KakuTag-only local synthetic single-frame benchmark on Raspberry Pi Zero 2 W:
@@ -113,8 +135,13 @@ Each `kakutag::Marker` contains:
 - `corners[4]`: corner positions as `cv::Point2f`.
 - `dict_index`: index of the matched dictionary when multiple dictionaries are used.
 
-The returned vector belongs to the detector. Copy the markers if you need to keep
-them after the next `detect()` call.
+The returned vector belongs to the detector and is overwritten by the next
+`detect()` call. Use a caller-owned output when you need to keep the markers:
+
+```cpp
+std::vector<kakutag::Marker> owned;
+detector.detect(image, owned);
+```
 
 Build from the same directory:
 
@@ -244,7 +271,21 @@ Input images should be `CV_8UC1`, `CV_8UC3`, or `CV_8UC4`.
 ## ✅ Requirements
 
 - C++20 compiler.
-- OpenCV `core`, `imgproc`, `calib3d`, and `objdetect`.
+- OpenCV 4.7 or newer with `core`, `imgproc`, `calib3d`, and `objdetect`.
+
+## 🧪 Tests and CI
+
+The repository includes a small generated-marker smoke test:
+
+```bash
+cmake -S . -B build -DKAKUTAG_BUILD_TESTS=ON
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+CI currently builds and runs this smoke test on Ubuntu and macOS with OpenCV from
+conda-forge. Broader compiler, Windows, dataset, and benchmark coverage are
+still planned.
 
 ## 📄 License
 

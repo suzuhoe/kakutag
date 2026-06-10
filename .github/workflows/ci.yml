@@ -1,0 +1,38 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: kakutag-ci
+          create-args: >-
+            cmake
+            ninja
+            cxx-compiler
+            opencv>=4.8
+
+      - name: Configure
+        shell: bash -el {0}
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DKAKUTAG_BUILD_TESTS=ON -DCMAKE_PREFIX_PATH="$CONDA_PREFIX"
+
+      - name: Build
+        shell: bash -el {0}
+        run: cmake --build build --config Release
+
+      - name: Test
+        shell: bash -el {0}
+        run: ctest --test-dir build --output-on-failure

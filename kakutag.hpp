@@ -21,6 +21,10 @@
 #ifndef KAKUTAG_KAKUTAG_HPP_
 #define KAKUTAG_KAKUTAG_HPP_
 
+#define KAKUTAG_VERSION_MAJOR 0
+#define KAKUTAG_VERSION_MINOR 0
+#define KAKUTAG_VERSION_PATCH 1
+
 // Suzuki85 neighbor-probe optimization.
 // 1 = use SWAR (SIMD Within A Register) 8-neighbor probe.
 // 0 = use scalar early-break probe.
@@ -3113,36 +3117,18 @@ public:
         return out_;
     }
 
-   
-    const std::vector<Marker>& detect(cv::InputArray image_in) const {
-        return const_cast<ArucoDetector*>(this)->detect(image_in);
+    // Caller-owned output variants. Prefer these when marker results must live
+    // past the next detect() call.
+    void detect(cv::InputArray image_in, std::vector<Marker>& markers) {
+        const auto& detected = detect(image_in);
+        markers.assign(detected.begin(), detected.end());
     }
-    void detectMarkers(cv::InputArray image,
-                       std::vector<std::vector<cv::Point2f>>& corners,
-                       std::vector<int>& ids,
-                       std::vector<std::vector<cv::Point2f>>* rejected = nullptr) const {
-        const_cast<ArucoDetector*>(this)->detectMarkers(image, corners, ids, rejected);
+
+    std::vector<Marker> detect_copy(cv::InputArray image_in) {
+        const auto& detected = detect(image_in);
+        return std::vector<Marker>(detected.begin(), detected.end());
     }
-    void detectMarkersMultiDict(cv::InputArray image,
-                                std::vector<std::vector<cv::Point2f>>& corners,
-                                std::vector<int>& ids,
-                                std::vector<std::vector<cv::Point2f>>* rejected = nullptr,
-                                std::vector<int>* dictIndices = nullptr) const {
-        const_cast<ArucoDetector*>(this)->detectMarkersMultiDict(image, corners, ids, rejected, dictIndices);
-    }
-    void detectMarkers(cv::InputArray image,
-                       cv::OutputArrayOfArrays corners,
-                       cv::OutputArray ids,
-                       cv::OutputArrayOfArrays rejectedImgPoints = cv::noArray()) const {
-        const_cast<ArucoDetector*>(this)->detectMarkers(image, corners, ids, rejectedImgPoints);
-    }
-    void detectMarkersMultiDict(cv::InputArray image,
-                                cv::OutputArrayOfArrays corners,
-                                cv::OutputArray ids,
-                                cv::OutputArrayOfArrays rejectedImgPoints = cv::noArray(),
-                                cv::OutputArray dictIndices = cv::noArray()) const {
-        const_cast<ArucoDetector*>(this)->detectMarkersMultiDict(image, corners, ids, rejectedImgPoints, dictIndices);
-    }
+
     void reset() {
         out_.clear();
         last_rejected_.clear();

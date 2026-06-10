@@ -19,6 +19,27 @@ OpenCV が提供する AprilTag 辞書を扱えます。
 > 可能性があります。production 用途では、自分の camera、CPU、compiler、OpenCV
 > version、marker family で必ず検証してください。
 
+## Current Maturity
+
+KakuTag は、まだ OpenCV ArUco の本番向け drop-in replacement ではありません。
+公開リポジトリには smoke test と CI の入口を追加していますが、real-camera dataset、
+golden-image regression、OpenCV と同条件で比較できる再現可能な benchmark harness は
+まだありません。
+
+既知の制約:
+
+- 下の benchmark 数値は local synthetic measurement であり、公開された再現可能benchmark
+  suiteではありません。
+- `ArucoDetector` は内部scratch bufferを変更します。threadごとに1 instanceを使い、
+  immutable objectとして扱わないでください。
+- `detect(image)` は detector 所有のvectorを返し、次の検出で上書きされます。結果を保持
+  したい場合は `detect(image, output)` または `detect_copy(image)` を使ってください。
+- `detect_inverted_marker` は通常passでmarkerが1つも見つからなかった場合だけ、反転画像で
+  retryします。同一画像に通常markerと反転markerが混在するケースは1回のdetector passでは
+  十分に扱えません。
+- detectorには限定的なsceneで調整したheuristic thresholdが含まれます。target workloadで
+  recall、false positive、corner error、pose errorを検証してください。
+
 ## 📊 Reference Benchmark
 
 Raspberry Pi Zero 2 W での KakuTag のみの synthetic single-frame benchmark です。
@@ -112,8 +133,13 @@ for (const kakutag::Marker& marker : markers) {
 - `corners[4]`: `cv::Point2f` のcorner positions。
 - `dict_index`: 複数辞書を使った場合に、どの辞書でmatchしたか。
 
-戻り値のvectorはdetectorが所有します。次の `detect()` 呼び出し後も使いたい場合は、
-markerをcopyしてください。
+戻り値のvectorはdetectorが所有し、次の `detect()` 呼び出しで上書きされます。結果を保持
+したい場合は、呼び出し側所有の出力を使ってください。
+
+```cpp
+std::vector<kakutag::Marker> owned;
+detector.detect(image, owned);
+```
 
 同じディレクトリからビルドする例です。
 
@@ -241,7 +267,20 @@ frame loopでは、余分な出力変換を避けられるnative APIの `detect(
 ## ✅ Requirements
 
 - C++20 compiler。
-- OpenCV `core`, `imgproc`, `calib3d`, `objdetect`。
+- OpenCV 4.7 以上と `core`, `imgproc`, `calib3d`, `objdetect`。
+
+## 🧪 Tests and CI
+
+リポジトリには、生成したmarkerを使う小さな smoke test を追加しています。
+
+```bash
+cmake -S . -B build -DKAKUTAG_BUILD_TESTS=ON
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+CIでは、conda-forgeのOpenCVを使って Ubuntu と macOS でこのsmoke testをbuild/runします。
+compiler matrix、Windows、dataset、benchmark coverage はまだ今後の課題です。
 
 ## 📄 License
 
