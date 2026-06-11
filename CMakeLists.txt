@@ -9,8 +9,9 @@ set(KAKUTAG_MIN_OPENCV_VERSION 4.7)
 
 option(KAKUTAG_BUILD_COMPILE_CHECK "Build a tiny KakuTag compile-check target" ON)
 option(KAKUTAG_BUILD_TESTS "Build KakuTag smoke tests" OFF)
+option(KAKUTAG_BUILD_BENCHMARKS "Build KakuTag benchmark tools" OFF)
 
-find_package(OpenCV ${KAKUTAG_MIN_OPENCV_VERSION} REQUIRED COMPONENTS core imgproc calib3d objdetect)
+find_package(OpenCV ${KAKUTAG_MIN_OPENCV_VERSION} REQUIRED COMPONENTS core imgproc imgcodecs calib3d objdetect)
 
 add_library(KakuTag INTERFACE)
 add_library(KakuTag::KakuTag ALIAS KakuTag)
@@ -61,6 +62,17 @@ if(KAKUTAG_BUILD_TESTS)
     add_executable(kakutag_smoke_tests tests/smoke.cpp)
     target_link_libraries(kakutag_smoke_tests PRIVATE KakuTag::KakuTag)
     add_test(NAME kakutag_smoke_tests COMMAND kakutag_smoke_tests)
+endif()
+
+if(KAKUTAG_BUILD_BENCHMARKS)
+    add_executable(kakutag_shadow_aruco_bench bench/shadow_aruco_bench.cpp)
+    target_compile_definitions(kakutag_shadow_aruco_bench PRIVATE
+        KAKUTAG_HAS_RECALL_PROFILES=1
+    )
+    target_link_libraries(kakutag_shadow_aruco_bench PRIVATE KakuTag::KakuTag)
+    if(TARGET opencv_imgcodecs)
+        target_link_libraries(kakutag_shadow_aruco_bench PRIVATE opencv_imgcodecs)
+    endif()
 endif()
 
 install(TARGETS KakuTag

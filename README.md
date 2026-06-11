@@ -40,6 +40,8 @@ Known limitations:
   not fully handled by one detector pass.
 - The detector contains heuristic thresholds tuned on limited scenes. Validate
   recall, false positives, corner error, and pose error on your target workload.
+- The default profile is latency-oriented. Use the balanced or high-recall
+  profiles below for hard shadow and low-contrast scenes.
 
 ## 📊 Reference Benchmark
 
@@ -268,6 +270,31 @@ the extra output conversion.
 
 Input images should be `CV_8UC1`, `CV_8UC3`, or `CV_8UC4`.
 
+## 🌗 Difficult Lighting
+
+The default profile stays conservative: low false positives and low latency are
+prioritized over recall. For difficult lighting, including Shadow-ArUco-like
+cast shadows, start with the balanced profile:
+
+```cpp
+auto dict = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_ARUCO_MIP_36h12);
+auto params = kakutag::make_balanced_recall_parameters(dict);
+kakutag::ArucoDetector detector(params);
+```
+
+If recall is more important than latency and false-positive risk, use the
+high-recall profile:
+
+```cpp
+auto params = kakutag::make_high_recall_parameters(dict);
+kakutag::ArucoDetector detector(params);
+```
+
+On Shadow-ArUco `video_1` with `DICT_ARUCO_MIP_36h12` and a 20 px corner-match
+threshold, the high-recall profile improved recall from 28.73% to 38.57% while
+keeping precision close to OpenCV ArUco in the same run. Validate the tradeoff
+on your own scenes before relying on it.
+
 ## ✅ Requirements
 
 - C++20 compiler.
@@ -281,6 +308,13 @@ The repository includes a small generated-marker smoke test:
 cmake -S . -B build -DKAKUTAG_BUILD_TESTS=ON
 cmake --build build
 ctest --test-dir build --output-on-failure
+```
+
+An optional Shadow-ArUco benchmark helper can be built with:
+
+```bash
+cmake -S . -B build -DKAKUTAG_BUILD_BENCHMARKS=ON
+cmake --build build --config Release --target kakutag_shadow_aruco_bench
 ```
 
 CI currently builds and runs this smoke test on Ubuntu and macOS with OpenCV from

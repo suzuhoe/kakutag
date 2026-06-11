@@ -5,7 +5,9 @@
 //
 // Depends on: OpenCV (objdetect, imgproc, calib3d, core).
 // Detects standard OpenCV ArUco dictionaries and OpenCV-provided AprilTag
-// dictionaries with low single-frame latency.
+// dictionaries with low single-frame latency. Default parameters use one-pass
+// contour hysteresis and conservative border tolerance for better real-video
+// recall without enabling slow ECC by default.
 //
 // Main entry points:
 //   1) kakutag::detect_single(gray)          -- stateless full detector with auto pyramid.
@@ -170,11 +172,11 @@ struct DetectorOptions {
     // threshold_offset_low act as WEAK continuation. This recovers small/low-
     // contrast marker borders without paying for a separate dual-threshold pass.
     // -1 disables hysteresis and uses the legacy single-threshold path.
-    int   threshold_offset_low  = -1;
+    int   threshold_offset_low  = 2;
     // ---- decode controls ----
     int    marker_border_bits             = 1;
     double error_correction_rate          = 0.0;
-    double max_erroneous_bits_in_border_rate = 0.0;
+    double max_erroneous_bits_in_border_rate = 0.10;
     bool   collect_rejected = false;
 
     // Internal detector-owned packed dictionary view. Public callers normally
@@ -1027,6 +1029,113 @@ inline void streaming_threshold_down2_to_buffer(
             if (add_ptr != rem_ptr) {
                 vsum_slide(vsum.data(), rem_ptr, add_ptr, sw);
             }
+        }
+    }
+}
+
+
+// Fused half-scale ternary threshold. This is the pyramid counterpart of
+// streaming_threshold_ternary_to_buffer(): it preserves KakuTag's fast half-
+// scale candidate generation while allowing weak shadowed border pixels to be
+// walked only from strong seeds. It avoids the old tradeoff of either using a
+// strict half-scale binary pass or paying for a full-resolution fallback.
+inline void streaming_threshold_down2_ternary_to_buffer(
+    const uint8_t* src, int w, int h, int stride,
+    int thres_high, int thres_low,
+    uint8_t* dst, int dst_stride, ThresholdScratch* scratch = nullptr,
+    BinaryBounds* bounds = nullptr, RunTileGate* run_gate = nullptr)
+{
+    if (!src || !dst || w < 2 || h < 2) return;
+    if (thres_low > thres_high) thres_low = thres_high;
+    if (bounds) bounds->reset();
+#if KAKUTAG_USE_RUN_TILE_GATE
+    if (run_gate) run_gate->any = false;
+#else
+    (void)run_gate;
+#endif
+    const int sw = w / 2;
+    const int sh = h / 2;
+    if (sw <= 0 || sh <= 0) return;
+
+    std::vector<uint8_t>  local_down_ring;
+    std::vector<uint16_t> local_hsum_ring;
+    std::vector<uint16_t> local_vsum;
+    std::vector<uint16_t> local_scratch_rem;
+    std::vector<uint8_t>& down_ring = scratch ? scratch->down_ring : local_down_ring;
+    std::vector<uint16_t>& hsum_ring = scratch ? scratch->hsum_ring : local_hsum_ring;
+    std::vector<uint16_t>& vsum = scratch ? scratch->vsum : local_vsum;
+    std::vector<uint16_t>& scratch_rem = scratch ? scratch->scratch_rem : local_scratch_rem;
+
+    const size_t ring_need = (size_t)kBoxK * (size_t)sw;
+    if (down_ring.size() < ring_need) down_ring.resize(ring_need);
+    if (hsum_ring.size() < ring_need) hsum_ring.resize(ring_need);
+    if (vsum.size() < (size_t)sw) vsum.resize((size_t)sw);
+    if (scratch_rem.size() < (size_t)sw) scratch_rem.resize((size_t)sw);
+
+    auto dslot = [&](int idx) -> uint8_t* {
+        int m = idx % kBoxK;
+        if (m < 0) m += kBoxK;
+        return down_ring.data() + (size_t)m * sw;
+    };
+    auto hslot = [&](int idx) -> uint16_t* {
+        int m = idx % kBoxK;
+        if (m < 0) m += kBoxK;
+        return hsum_ring.data() + (size_t)m * sw;
+    };
+
+    int rows_to_init = std::min(kBoxR + 1, sh);
+    for (int r = 0; r < rows_to_init; ++r) {
+        hsum_down2_row_simd(src, h, stride, r, sw, dslot(r), hslot(r));
+    }
+
+    const uint16_t* init_rows[kBoxK];
+    for (int dy = -kBoxR, i = 0; dy <= kBoxR; ++dy, ++i) {
+        int phys = dy;
+        if (phys < 0) phys = 0;
+        if (phys >= sh) phys = sh - 1;
+        init_rows[i] = hslot(phys);
+    }
+    for (int x = 0; x < sw; ++x) {
+        int sum = 0;
+        for (int k = 0; k < kBoxK; ++k) sum += int(init_rows[k][x]);
+        vsum[(size_t)x] = (uint16_t)sum;
+    }
+
+    for (int y = 0; y < sh; ++y) {
+        uint8_t* drow = dst + y * dst_stride;
+        emit_row_ternary(dslot(y), vsum.data(), sw, thres_high, thres_low, drow);
+        if (bounds && y > 0 && y + 1 < sh && sw > 2) {
+            for (int x = 1; x < sw - 1; ++x) {
+                if (drow[x]) bounds->add_span(y, x, x);
+            }
+        }
+#if KAKUTAG_USE_RUN_TILE_GATE
+        if (run_gate && y > 0 && y + 1 < sh && sw > 2)
+            update_run_tile_gate_from_row(drow, y, sw, run_gate, 1, sw - 2);
+#endif
+        if (y + 1 >= sh) break;
+
+        int leave_phys = y - kBoxR;
+        int enter_phys = y + 1 + kBoxR;
+        const uint16_t* rem_ptr;
+        if (leave_phys < 0) rem_ptr = hslot(0);
+        else if (leave_phys >= sh) rem_ptr = hslot(sh - 1);
+        else rem_ptr = hslot(leave_phys);
+
+        if (enter_phys < sh) {
+            uint16_t* dst_hslot = hslot(enter_phys);
+            uint8_t*  dst_dslot = dslot(enter_phys);
+            if (dst_hslot == rem_ptr) {
+                std::memcpy(scratch_rem.data(), rem_ptr, (size_t)sw * sizeof(uint16_t));
+                hsum_down2_row_simd(src, h, stride, enter_phys, sw, dst_dslot, dst_hslot);
+                vsum_slide(vsum.data(), scratch_rem.data(), dst_hslot, sw);
+            } else {
+                hsum_down2_row_simd(src, h, stride, enter_phys, sw, dst_dslot, dst_hslot);
+                vsum_slide(vsum.data(), rem_ptr, dst_hslot, sw);
+            }
+        } else {
+            const uint16_t* add_ptr = hslot(sh - 1);
+            if (add_ptr != rem_ptr) vsum_slide(vsum.data(), rem_ptr, add_ptr, sw);
         }
     }
 }
@@ -1972,66 +2081,104 @@ inline bool sample_and_decode_cv(
     int max_hamming = 0,
     const PackedDict* packed_dict = nullptr)
 {
+    (void)attempt_index;
     const int M = dict.markerSize;
     if (M <= 0 || border_bits <= 0) return false;
     const int gs = M + 2 * border_bits;
-    cv::Mat bits(gs, gs, CV_8UC1);
+    if (gs <= 0 || gs > 64) return false;
 
-    const cv::Point2f src[4] = {{0,0}, {1,0}, {1,1}, {0,1}};
+    // High-recall reference sampler.  The fast path samples one value per cell;
+    // that is intentionally cheap, but it is brittle under cast shadows, blur,
+    // and small corner bias.  This fallback mirrors OpenCV's ArUco extraction
+    // strategy more closely: warp the whole candidate to a canonical image,
+    // threshold there, and decide each bit by majority vote inside the cell.
+    // It is slower, so callers reach this path only on robust attempts, small
+    // candidates, or when ECC/high-recall parameters are enabled.
+    constexpr int kCellSize = 4;
+    constexpr double kCellMarginRate = 0.13;
+    constexpr double kMinStdDevOtsu = 5.0;
+    const int canonical_side = gs * kCellSize;
+    if (canonical_side <= 0) return false;
+
+    const cv::Point2f dst[4] = {
+        {0.0f, 0.0f},
+        {(float)canonical_side - 1.0f, 0.0f},
+        {(float)canonical_side - 1.0f, (float)canonical_side - 1.0f},
+        {0.0f, (float)canonical_side - 1.0f}
+    };
+
     cv::Mat H;
-    try { H = cv::getPerspectiveTransform(src, img_corners); } catch (...) { return false; }
-    if (H.empty() || H.rows != 3 || H.cols != 3) return false;
-    const double* h = H.ptr<double>();
-    const bool unchecked_sample =
-        quad_has_unchecked_bilinear_margin(img_corners, full_bw.cols, full_bw.rows);
-    const double inv_gs = 1.0 / (double)gs;
-    const double u0 = 0.5 * inv_gs;
+    try {
+        H = cv::getPerspectiveTransform(img_corners, dst);
+    } catch (...) {
+        return false;
+    }
+    if (H.empty()) return false;
 
-    for (int rr = 0; rr < gs; ++rr) {
-        const double v = ((double)rr + 0.5) * inv_gs;
-        double xn = h[0] * u0 + h[1] * v + h[2];
-        double yn = h[3] * u0 + h[4] * v + h[5];
-        double dn = h[6] * u0 + h[7] * v + h[8];
-        uint8_t* brow = bits.ptr<uint8_t>(rr);
-        for (int cc = 0; cc < gs; ++cc) {
-            if (std::abs(dn) < 1e-6) return false;
-            const float fx = (float)(xn / dn);
-            const float fy = (float)(yn / dn);
-            const float vv = sample_bilinear_fast(full_bw, fx, fy, unchecked_sample);
-            brow[cc] = (uint8_t)(vv + 0.5f);
-            xn += h[0] * inv_gs;
-            yn += h[3] * inv_gs;
-            dn += h[6] * inv_gs;
+    cv::Mat canonical;
+    try {
+        cv::warpPerspective(full_bw, canonical, H,
+                            cv::Size(canonical_side, canonical_side),
+                            cv::INTER_NEAREST);
+    } catch (...) {
+        return false;
+    }
+    if (canonical.empty() || canonical.type() != CV_8UC1) return false;
+
+    cv::Mat binary;
+    const int inner_margin = std::max(0, kCellSize / 2);
+    cv::Rect inner_rect(inner_margin, inner_margin,
+                        canonical.cols - 2 * inner_margin,
+                        canonical.rows - 2 * inner_margin);
+    inner_rect &= cv::Rect(0, 0, canonical.cols, canonical.rows);
+    if (inner_rect.empty()) return false;
+
+    cv::Scalar mean, stddev;
+    cv::meanStdDev(canonical(inner_rect), mean, stddev);
+    if (stddev[0] < kMinStdDevOtsu) {
+        binary = cv::Mat(canonical.size(), CV_8UC1,
+                         cv::Scalar(mean[0] > 127.0 ? 255 : 0));
+    } else {
+        cv::threshold(canonical, binary, 0, 255, cv::THRESH_BINARY | cv::THRESH_OTSU);
+    }
+
+    cv::Mat bits(gs, gs, CV_8UC1, cv::Scalar(0));
+    const int cell_margin = std::max(0, (int)std::floor(kCellMarginRate * (double)kCellSize));
+    const int vote_side = std::max(1, kCellSize - 2 * cell_margin);
+    for (int y = 0; y < gs; ++y) {
+        uint8_t* brow = bits.ptr<uint8_t>(y);
+        for (int x = 0; x < gs; ++x) {
+            const int x0 = x * kCellSize + cell_margin;
+            const int y0 = y * kCellSize + cell_margin;
+            cv::Rect cell(x0, y0, vote_side, vote_side);
+            cell &= cv::Rect(0, 0, binary.cols, binary.rows);
+            if (cell.empty()) return false;
+            const int white = cv::countNonZero(binary(cell));
+            if (white > (int)cell.area() / 2) brow[x] = 1;
         }
     }
-    if (attempt_index == 2) {
-        cv::adaptiveThreshold(bits, bits, 255, cv::ADAPTIVE_THRESH_MEAN_C,
-                              cv::THRESH_BINARY, std::min(gs | 1, 5), 0);
-    } else {
-        cv::threshold(bits, bits, 0, 255, cv::THRESH_OTSU);
-    }
-    // Border check: outer border_bits rings must be mostly black.
-    int border_black = 0, border_total = 0;
+
+    int border_errors = 0, border_total = 0;
     for (int br = 0; br < border_bits; ++br) {
         for (int x = 0; x < gs; ++x) {
             border_total += 2;
-            if (bits.at<uint8_t>(br, x) < 128) ++border_black;
-            if (bits.at<uint8_t>(gs - 1 - br, x) < 128) ++border_black;
+            if (bits.ptr<uint8_t>(br)[x] != 0) ++border_errors;
+            if (bits.ptr<uint8_t>(gs - 1 - br)[x] != 0) ++border_errors;
         }
         for (int y = br + 1; y < gs - 1 - br; ++y) {
             border_total += 2;
-            if (bits.at<uint8_t>(y, br) < 128) ++border_black;
-            if (bits.at<uint8_t>(y, gs - 1 - br) < 128) ++border_black;
+            if (bits.ptr<uint8_t>(y)[br] != 0) ++border_errors;
+            if (bits.ptr<uint8_t>(y)[gs - 1 - br] != 0) ++border_errors;
         }
     }
-    const float border_white_rate =
-        border_total > 0 ? 1.0f - (float)border_black / (float)border_total : 0.0f;
-    const float border_white_tol  = (float)max_erroneous_bits_in_border_rate;
-    if (border_total > 0 && border_white_rate > border_white_tol) return false;
-    cv::Mat inner(M, M, CV_8UC1);
-    for (int r = 0; r < M; ++r)
-        for (int c = 0; c < M; ++c)
-            inner.at<uint8_t>(r, c) = bits.at<uint8_t>(r + border_bits, c + border_bits) > 127 ? 1 : 0;
+    const float border_error_rate = border_total > 0
+        ? (float)border_errors / (float)border_total : 0.0f;
+    if (border_total > 0 && border_error_rate > (float)max_erroneous_bits_in_border_rate) {
+        return false;
+    }
+
+    cv::Mat inner = bits.rowRange(border_bits, gs - border_bits)
+                        .colRange(border_bits, gs - border_bits);
     const int nbits = M * M;
     const int nbytes = (nbits + 7) / 8;
     std::vector<uint8_t> code;
@@ -2059,8 +2206,7 @@ inline bool sample_and_decode_cv(
         if (matched || error_correction_rate <= 0.0) return matched;
     }
     if (!dict_has_bytes_list_layout(dict, nbytes)) return false;
-    double max_correction = error_correction_rate;
-    return dict.identify(inner, out_id, out_rot, max_correction);
+    return dict.identify(inner, out_id, out_rot, error_correction_rate);
 }
 
 inline uint8_t otsu_threshold_u8_small(const uint8_t* v, int n) {
@@ -2726,27 +2872,55 @@ inline void detect_halfscale_full_decode_into(
 #endif
 #if KAKUTAG_USE_THRESHOLD_BOUNDS
     BinaryBounds threshold_bounds;
-    streaming_threshold_down2_to_buffer(gray.ptr<uint8_t>(), gray.cols, gray.rows,
-                                        (int)gray.step, opt.threshold_offset,
-                                        thr_small_buf.ptr<uint8_t>(),
-                                        (int)thr_small_buf.step,
-                                        scratch ? &scratch->threshold : nullptr,
-                                        &threshold_bounds
+    if (opt.threshold_offset_low >= 0 && opt.threshold_offset_low < opt.threshold_offset) {
+        streaming_threshold_down2_ternary_to_buffer(gray.ptr<uint8_t>(), gray.cols, gray.rows,
+                                                    (int)gray.step, opt.threshold_offset,
+                                                    opt.threshold_offset_low,
+                                                    thr_small_buf.ptr<uint8_t>(),
+                                                    (int)thr_small_buf.step,
+                                                    scratch ? &scratch->threshold : nullptr,
+                                                    &threshold_bounds
 #if KAKUTAG_USE_RUN_TILE_GATE
-                                        , &run_gate
+                                                    , &run_gate
 #endif
-                                        );
+                                                    );
+    } else {
+        streaming_threshold_down2_to_buffer(gray.ptr<uint8_t>(), gray.cols, gray.rows,
+                                            (int)gray.step, opt.threshold_offset,
+                                            thr_small_buf.ptr<uint8_t>(),
+                                            (int)thr_small_buf.step,
+                                            scratch ? &scratch->threshold : nullptr,
+                                            &threshold_bounds
+#if KAKUTAG_USE_RUN_TILE_GATE
+                                            , &run_gate
+#endif
+                                            );
+    }
 #else
-    streaming_threshold_down2_to_buffer(gray.ptr<uint8_t>(), gray.cols, gray.rows,
-                                        (int)gray.step, opt.threshold_offset,
-                                        thr_small_buf.ptr<uint8_t>(),
-                                        (int)thr_small_buf.step,
-                                        scratch ? &scratch->threshold : nullptr,
-                                        nullptr
+    if (opt.threshold_offset_low >= 0 && opt.threshold_offset_low < opt.threshold_offset) {
+        streaming_threshold_down2_ternary_to_buffer(gray.ptr<uint8_t>(), gray.cols, gray.rows,
+                                                    (int)gray.step, opt.threshold_offset,
+                                                    opt.threshold_offset_low,
+                                                    thr_small_buf.ptr<uint8_t>(),
+                                                    (int)thr_small_buf.step,
+                                                    scratch ? &scratch->threshold : nullptr,
+                                                    nullptr
 #if KAKUTAG_USE_RUN_TILE_GATE
-                                        , &run_gate
+                                                    , &run_gate
 #endif
-                                        );
+                                                    );
+    } else {
+        streaming_threshold_down2_to_buffer(gray.ptr<uint8_t>(), gray.cols, gray.rows,
+                                            (int)gray.step, opt.threshold_offset,
+                                            thr_small_buf.ptr<uint8_t>(),
+                                            (int)thr_small_buf.step,
+                                            scratch ? &scratch->threshold : nullptr,
+                                            nullptr
+#if KAKUTAG_USE_RUN_TILE_GATE
+                                            , &run_gate
+#endif
+                                            );
+    }
 #endif
 #if KAKUTAG_USE_RUN_TILE_GATE
     if (!run_gate.any) return;
@@ -2898,9 +3072,10 @@ struct DetectorParameters {
     int   max_attempts      = 7;
     int   threshold_offset  = 5;
     // Hysteresis low offset (>=0 enables ternary single-pass candidate generation).
-    // Default OFF (-1): single-threshold legacy path. Set to 1 (or 0) to enable
-    // ternary 1-pass small-marker candidate generation.
-    int   threshold_offset_low = -1;
+    // Default ON (2): one-pass strong/weak contour hysteresis. This improves
+    // low-contrast/shadow recall without running a second threshold pass.
+    // Set to -1 for the older strict single-threshold path.
+    int   threshold_offset_low = 2;
 
     // What to compute (skip the rest for speed)
     bool  refine_corners    = true;
@@ -2929,8 +3104,10 @@ struct DetectorParameters {
     double error_correction_rate = 0.0;
     int    max_hamming = 0;            // absolute bit errors accepted by packed matcher
     // Maximum acceptable rate of erroneous bits in the marker border (the
-    // outer black ring). 0 means "no border error allowed", matching the conservative default.
-    double max_erroneous_bits_in_border_rate = 0.0;
+    // outer black ring). KakuTag keeps this much stricter than OpenCV's
+    // 0.35 default, but no longer requires a perfectly black border: real
+    // shadowed markers often contain a few damaged border cells.
+    double max_erroneous_bits_in_border_rate = 0.10;
     // Detect markers printed in white on a black background by also running a
     // bit-inverted pass when the primary pass finds nothing.
     bool   detect_inverted_marker = false;
@@ -2950,6 +3127,56 @@ struct DetectorParameters {
     bool   detectInvertedMarker = false;// ORed with detect_inverted_marker
 
 };
+
+
+// Balanced profile: keep the fast AutoSingle backbone, but enable one-pass
+// contour hysteresis and a small border-error allowance. This is the default
+// pre-alpha direction for real video: it targets Shadow-ArUco-style low
+// contrast without invoking OpenCV-style ECC on every candidate.
+inline void apply_balanced_recall_profile(DetectorParameters& p) {
+    p.mode = Mode::AutoSingle;
+    p.threshold_offset = 5;
+    p.threshold_offset_low = 2;
+    p.max_erroneous_bits_in_border_rate = std::max(p.max_erroneous_bits_in_border_rate, 0.10);
+    p.error_correction_rate = 0.0;
+    p.max_hamming = std::max(p.max_hamming, 0);
+    p.safe_fallback = true;
+    p.robust_small_markers = true;
+    p.dual_threshold_small_markers = true;
+    p.cv_contour_small_recovery = true;
+}
+
+inline DetectorParameters make_balanced_recall_parameters(const cv::aruco::Dictionary& dict) {
+    DetectorParameters p;
+    p.dicts = {dict};
+    apply_balanced_recall_profile(p);
+    return p;
+}
+
+// High-recall profile for difficult illumination: cast shadows, low contrast,
+// blur, and heavily slanted markers. It intentionally trades some latency and
+// false-positive margin for recall. Validate precision on your own scenes.
+inline void apply_high_recall_profile(DetectorParameters& p) {
+    p.mode = Mode::Full;
+    p.threshold_offset = 5;
+    p.threshold_offset_low = 2;
+    p.max_attempts = std::max(p.max_attempts, 7);
+    p.refine_corners = true;
+    p.safe_fallback = true;
+    p.robust_small_markers = true;
+    p.dual_threshold_small_markers = true;
+    p.cv_contour_small_recovery = true;
+    p.max_erroneous_bits_in_border_rate = std::max(p.max_erroneous_bits_in_border_rate, 0.30);
+    p.max_hamming = std::max(p.max_hamming, 3);
+    p.error_correction_rate = std::max(p.error_correction_rate, 0.6);
+}
+
+inline DetectorParameters make_high_recall_parameters(const cv::aruco::Dictionary& dict) {
+    DetectorParameters p;
+    p.dicts = {dict};
+    apply_high_recall_profile(p);
+    return p;
+}
 
 // ============================================================================
 // Unified detector. Compatible in spirit with cv::aruco::ArucoDetector:
