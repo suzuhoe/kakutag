@@ -1,16 +1,15 @@
 # KakuTag ✨
 
 <p align="center">
-  <b>A tiny C++20 header for fast square-marker detection.</b><br/>
-  <sub>Drop in one file, use OpenCV dictionaries, get marker IDs and corners.</sub>
+  <b>A C++20 single-header detector for OpenCV-compatible square markers.</b>
 </p>
 
 <p align="center">
   <a href="README.md">English</a> | <a href="README.ja.md">日本語</a>
 </p>
 
-KakuTag is a single-header fiducial marker detector built for small C++ projects,
-camera loops, embedded devices, and quick experiments.
+KakuTag is a C++20 single-header fiducial marker detector for applications that
+need marker IDs and corner coordinates from camera frames or still images.
 
 It works with OpenCV's `cv::aruco::Dictionary` format, so you can use standard
 OpenCV ArUco dictionaries and the AprilTag dictionaries exposed by OpenCV.
@@ -295,6 +294,18 @@ As one difficult-lighting check, Shadow-ArUco `video_1` with
 recall with the default profile to 38.57% with the high-recall profile. Treat
 that as one dataset result, not a universal setting. Validate the tradeoff on
 your own scenes before relying on it.
+
+Dataset attribution: the Shadow-ArUco result above uses `video_1` from the
+[Shadow-ArUco Dataset](https://zenodo.org/records/10791293), created by Rafael
+Berral-Soler, Hamid Sarmadi, Rafael Muñoz-Salinas, Rafael Medina-Carnicer, and
+Manuel J. Marín-Jiménez, published by the University of Córdoba - Artificial
+Vision Applications group. DOI:
+[10.5281/zenodo.10791293](https://doi.org/10.5281/zenodo.10791293). License:
+[Creative Commons Attribution 4.0 International](https://creativecommons.org/licenses/by/4.0/)
+(`CC BY 4.0`).
+The dataset is not included in this repository. If you use Shadow-ArUco in
+research, follow the citation guidance on the
+[dataset page](https://www.uco.es/investiga/grupos/ava/portfolio/shadow-aruco-dataset/).
 
 ## ✅ Requirements
 

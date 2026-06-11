@@ -1,16 +1,15 @@
 # KakuTag ✨
 
 <p align="center">
-  <b>小さく入れて、すぐ使える C++20 single-header marker detector。</b><br/>
-  <sub>1ファイルを置いて、OpenCV辞書を渡して、marker ID と corners を受け取ります。</sub>
+  <b>OpenCV互換の正方形マーカーを検出する C++20 単一ヘッダ detector。</b>
 </p>
 
 <p align="center">
   <a href="README.md">English</a> | <a href="README.ja.md">日本語</a>
 </p>
 
-KakuTag は、小さなC++ project、camera loop、embedded device、実験用prototypeで使いやすい
-single-header fiducial marker detector です。
+KakuTag は、カメラフレームや静止画像からマーカーIDと四隅の座標を取得するための
+C++20単一ヘッダ fiducial marker detector です。
 
 OpenCV の `cv::aruco::Dictionary` 形式を使います。標準の OpenCV ArUco 辞書と、
 OpenCV が提供する AprilTag 辞書を扱えます。
@@ -288,6 +287,18 @@ kakutag::ArucoDetector detector(params);
 corner-match thresholdの条件では、default profileのrecall 28.73%からhigh-recall
 profileの38.57%へ改善しました。これは1つのdataset結果であり、万能設定ではありません。
 利用前に自分のsceneでtradeoffを検証してください。
+
+Dataset attribution: 上のShadow-ArUco結果は
+[Shadow-ArUco Dataset](https://zenodo.org/records/10791293) の `video_1` を使っています。
+データセットの作成者は Rafael Berral-Soler, Hamid Sarmadi, Rafael Muñoz-Salinas,
+Rafael Medina-Carnicer, Manuel J. Marín-Jiménez で、公開元は University of Córdoba -
+Artificial Vision Applications group です。DOI:
+[10.5281/zenodo.10791293](https://doi.org/10.5281/zenodo.10791293)。ライセンス:
+[Creative Commons Attribution 4.0 International](https://creativecommons.org/licenses/by/4.0/)
+（`CC BY 4.0`）。
+このリポジトリにはdataset本体を含めていません。研究でShadow-ArUcoを使う場合は、
+[dataset page](https://www.uco.es/investiga/grupos/ava/portfolio/shadow-aruco-dataset/)
+の引用案内に従ってください。
 
 ## ✅ Requirements
 
