@@ -41,7 +41,7 @@ Known limitations:
 - The detector contains heuristic thresholds tuned on limited scenes. Validate
   recall, false positives, corner error, and pose error on your target workload.
 - The default profile is latency-oriented. Use the balanced or high-recall
-  profiles below for hard shadow and low-contrast scenes.
+  profiles below for difficult lighting, mild blur, and low-contrast scenes.
 
 ## 📊 Reference Benchmark
 
@@ -273,8 +273,8 @@ Input images should be `CV_8UC1`, `CV_8UC3`, or `CV_8UC4`.
 ## 🌗 Difficult Lighting
 
 The default profile stays conservative: low false positives and low latency are
-prioritized over recall. For difficult lighting, including Shadow-ArUco-like
-cast shadows, start with the balanced profile:
+prioritized over recall. For uneven illumination, mild blur, or low-contrast
+camera input, start with the balanced profile:
 
 ```cpp
 auto dict = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_ARUCO_MIP_36h12);
@@ -290,10 +290,11 @@ auto params = kakutag::make_high_recall_parameters(dict);
 kakutag::ArucoDetector detector(params);
 ```
 
-On Shadow-ArUco `video_1` with `DICT_ARUCO_MIP_36h12` and a 20 px corner-match
-threshold, the high-recall profile improved recall from 28.73% to 38.57% while
-keeping precision close to OpenCV ArUco in the same run. Validate the tradeoff
-on your own scenes before relying on it.
+As one difficult-lighting check, Shadow-ArUco `video_1` with
+`DICT_ARUCO_MIP_36h12` and a 20 px corner-match threshold improved from 28.73%
+recall with the default profile to 38.57% with the high-recall profile. Treat
+that as one dataset result, not a universal setting. Validate the tradeoff on
+your own scenes before relying on it.
 
 ## ✅ Requirements
 

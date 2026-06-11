@@ -39,8 +39,8 @@ golden-image regression、OpenCV と同条件で比較できる再現可能な b
   十分に扱えません。
 - detectorには限定的なsceneで調整したheuristic thresholdが含まれます。target workloadで
   recall、false positive、corner error、pose errorを検証してください。
-- default profile は低遅延寄りです。強い影や低contrastのsceneでは、下のbalanced /
-  high-recall profileを使ってください。
+- default profile は低遅延寄りです。照明ムラ、軽いblur、低contrastのsceneでは、
+  下のbalanced / high-recall profileを使ってください。
 
 ## 📊 Reference Benchmark
 
@@ -269,7 +269,7 @@ frame loopでは、余分な出力変換を避けられるnative APIの `detect(
 ## 🌗 難しい照明条件
 
 default profileは保守的です。false positiveを抑え、低遅延を優先します。
-Shadow-ArUcoのような影・低contrast環境では、まずbalanced profileを試してください。
+照明ムラ、軽いblur、低contrastのcamera inputでは、まずbalanced profileを試してください。
 
 ```cpp
 auto dict = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_ARUCO_MIP_36h12);
@@ -284,9 +284,10 @@ auto params = kakutag::make_high_recall_parameters(dict);
 kakutag::ArucoDetector detector(params);
 ```
 
-Shadow-ArUco `video_1`、`DICT_ARUCO_MIP_36h12`、20 px corner-match thresholdの条件では、
-high-recall profileによりrecallが28.73%から38.57%へ改善しました。同じrunでprecisionは
-OpenCV ArUcoに近い水準でした。利用前に自分のsceneでtradeoffを検証してください。
+難照明の確認例として、Shadow-ArUco `video_1`、`DICT_ARUCO_MIP_36h12`、20 px
+corner-match thresholdの条件では、default profileのrecall 28.73%からhigh-recall
+profileの38.57%へ改善しました。これは1つのdataset結果であり、万能設定ではありません。
+利用前に自分のsceneでtradeoffを検証してください。
 
 ## ✅ Requirements
 

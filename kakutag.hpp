@@ -3130,9 +3130,9 @@ struct DetectorParameters {
 
 
 // Balanced profile: keep the fast AutoSingle backbone, but enable one-pass
-// contour hysteresis and a small border-error allowance. This is the default
-// pre-alpha direction for real video: it targets Shadow-ArUco-style low
-// contrast without invoking OpenCV-style ECC on every candidate.
+// contour hysteresis and a small border-error allowance. This is intended for
+// real video with uneven illumination, mild blur, or low contrast without
+// invoking OpenCV-style ECC on every candidate.
 inline void apply_balanced_recall_profile(DetectorParameters& p) {
     p.mode = Mode::AutoSingle;
     p.threshold_offset = 5;
